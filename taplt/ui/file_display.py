@@ -40,7 +40,7 @@ class CenterDisplayWidget(QWidget):
 
         # Setup of the slide viewer with its own scene
         self.slide_viewer = slide_view(self.scene)
-        self.slide_viewer.sendImage.connect(self.display_slide)
+        self.slide_viewer.sendPixmap.connect(self.set_pixmap_to_slide)
 
         self.pixmap = QGraphicsPixmapItem()
         self.scene.addItem(self.pixmap)
@@ -115,7 +115,7 @@ class CenterDisplayWidget(QWidget):
         self.video_label.setPixmap(pix)
         self.video_label.show()
 
-    def display_slide(self, pixmap_item):
+    def set_pixmap_to_slide(self, pixmap_item):
         self.pixmap = pixmap_item
         self.scene.addItem(self.pixmap)
 

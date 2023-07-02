@@ -15,8 +15,7 @@ from openslide import OpenSlide
 
 
 class slide_view(QGraphicsView):
-    sendImage = pyqtSignal(QGraphicsPixmapItem)
-    imageFinished = pyqtSignal()
+    sendPixmap = pyqtSignal(QGraphicsPixmapItem)
 
     def __init__(self, *args):
         super(slide_view, self).__init__(*args)
@@ -77,7 +76,6 @@ class slide_view(QGraphicsView):
             self.height = self.scene().views()[0].viewport().height()
 
         rect = QRectF(QPointF(0, 0), QSizeF(self.width, self.height))
-        self.imageFinished.connect(self.image_finished)
 
         self.fused_image = QPixmap(self.width * 4, self.height * 4)
         self.pixmap_item.setPixmap(self.fused_image)
@@ -123,7 +121,7 @@ class slide_view(QGraphicsView):
 
             self.pixmap_item.setPixmap(self.fused_image)
             self.pixmap_item.setScale(self.down_sample_factors[self.cur_level] / self.cur_scaling_factor)
-            self.imageFinished.emit()
+            self.sendPixmap.emit(self.pixmap_item)
 
     def check_for_update(self, move, zoomed):
         self.width = self.scene().views()[0].viewport().width()
@@ -153,21 +151,19 @@ class slide_view(QGraphicsView):
 
         new_patches = [*set(new_patches)]
 
-        if len(new_patches) == 0:
-            original = self.fused_image.copy()
-            self.painter = QPainter(self.fused_image)
+       # if len(new_patches) == 0:
+        original = self.fused_image.copy()
+        self.painter = QPainter(self.fused_image)
 
-            og_width = original.width()
-            og_height = original.height()
+        self.painter.drawPixmap(-move.x(),
+                                -move.y(),
+                                original.width(), original.height(), original)
 
-            self.painter.drawPixmap(-move.x(),
-                                    -move.y(),
-                                    original.width(), original.height(), original)
-
-            self.painter.end()
-            self.pixmap_item.setPixmap(self.fused_image)
-            self.pixmap_item.setScale(self.down_sample_factors[self.cur_level] / self.cur_scaling_factor)
-            self.sendImage.emit(self.pixmap_item)
+        self.painter.end()
+        self.pixmap_item.pixmap().fill(0)
+        self.pixmap_item.setPixmap(self.fused_image)
+        self.pixmap_item.setScale(self.down_sample_factors[self.cur_level] / self.cur_scaling_factor)
+        #self.sendImage.emit(self.pixmap_item)
 
 
         # block_width = int(self.width)
@@ -194,9 +190,6 @@ class slide_view(QGraphicsView):
         #     self.pixmap_item.setPixmap(self.fused_image)
         #     self.pixmap_item.setScale(self.down_sample_factors[self.cur_level] / self.cur_scaling_factor)
         #     self.imageFinished.emit()
-
-    def image_finished(self):
-        self.sendImage.emit(self.pixmap_item)
 
     def process_image_block(self, block_index, mouse_pos, block_width, block_height, block_offset_width,
                             block_offset_height, sqrt_threads, moved):
@@ -232,6 +225,7 @@ class slide_view(QGraphicsView):
         :return: /
         """
         old_scaling_factor = self.cur_scaling_factor
+        old_scale = self.down_sample_factors[self.cur_level] / self.cur_scaling_factor
 
         scale_factor = 1.1 if event.angleDelta().y() <= 0 else 1 / 1.1
         new_scaling_factor = min(max(self.cur_scaling_factor * scale_factor, 1), self.max_scaling_factor)
@@ -241,7 +235,17 @@ class slide_view(QGraphicsView):
 
         self.cur_scaling_factor = new_scaling_factor
         self.cur_level = self.slide.get_best_level_for_downsample(self.cur_scaling_factor)
-        relative_scaling_factor = self.cur_scaling_factor/self.down_sample_factors[self.cur_level]
+        old_relative_scaling_factor = self.relative_scaling_factor
+        self.relative_scaling_factor = self.cur_scaling_factor/self.down_sample_factors[self.cur_level]
+        self.pixmap_item.setScale(self.down_sample_factors[self.cur_level]/self.cur_scaling_factor)
+        new_scale = self.down_sample_factors[self.cur_level]/self.cur_scaling_factor
+        pixmap_pos = self.pixmap_item.pos()
+        self.pixmap_item.setPos(QPointF(-self.width * (self.down_sample_factors[self.cur_level] / self.cur_scaling_factor) -
+                                        (self.width * 2 - self.width * 2 * new_scale),
+                                        -self.height * (self.down_sample_factors[self.cur_level] / self.cur_scaling_factor) -
+                                        (self.height * 2 - self.height * 2 * new_scale)))
+        # self.pixmap_item.moveBy(-self.width * (self.down_sample_factors[self.cur_level] / self.cur_scaling_factor),
+        #                         -self.height * (self.down_sample_factors[self.cur_level] / self.cur_scaling_factor))
 
         new_pos = self.mapToScene(event.position().toPoint())
 
@@ -250,14 +254,14 @@ class slide_view(QGraphicsView):
                                         (self.height - self.height*scale_factor)/2)
 
         new_pos = QPointF((new_pos.x()/self.width - 0.5) *
-                          self.dimensions[self.dim_count - self.cur_level - 1][0] * relative_scaling_factor,
+                          self.dimensions[self.dim_count - self.cur_level - 1][0] * self.relative_scaling_factor,
                           (new_pos.y()/self.height - 0.5) *
-                          self.dimensions[self.dim_count - self.cur_level - 1][1] * relative_scaling_factor)
+                          self.dimensions[self.dim_count - self.cur_level - 1][1] * self.relative_scaling_factor)
 
         self.mouse_pos += QPointF(self.width/2 * (old_scaling_factor - self.cur_scaling_factor),
                                   self.height/2 * (old_scaling_factor - self.cur_scaling_factor))
         self.mouse_pos += new_pos
-        self.check_for_update(False, True)
+        #self.check_for_update(QPointF(0,0), True)
 
     def mousePressEvent(self, event: QMouseEvent):
         """
@@ -292,10 +296,11 @@ class slide_view(QGraphicsView):
         if self.panning:
             new_pos = self.mapToScene(event.pos())
             move = self.pan_start - new_pos
+            self.pixmap_item.moveBy(-move.x(), -move.y())
             self.scene_mouse_pos += move
             move = QPointF(move.x()/self.width*self.dimensions[self.dim_count - self.cur_level - 1][0],
                                       move.y()/self.height*self.dimensions[self.dim_count - self.cur_level - 1][1])
             self.pan_start = new_pos
             self.mouse_pos += move
-            self.check_for_update(move, False)
+            #self.check_for_update(move, False)
         super(QGraphicsView, self).mouseMoveEvent(event)
