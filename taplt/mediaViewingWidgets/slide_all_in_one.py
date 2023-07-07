@@ -80,6 +80,10 @@ class slide_view(QGraphicsView):
         self.pixmap_item.setPixmap(self.fused_image)
         self.pixmap_item.setOffset(-self.width, -self.height)
 
+        self.image_blocks = {i: QPixmap(self.width, self.height) for i in range(16)}
+        self.image_blocks = np.array(list(self.image_blocks.values()))
+        self.image_blocks = self.image_blocks.reshape([4, 4])
+
         self.dimensions = np.array(self.slide.level_dimensions)
         self.dim_count = self.slide.level_count
         self.patch_dims = [self.dimensions[self.dim_count - 1][0], self.dimensions[self.dim_count - 1][1]]
@@ -94,34 +98,6 @@ class slide_view(QGraphicsView):
         self.relative_scaling_factor = self.cur_scaling_factor / self.down_sample_factors[self.cur_level]
         self.pos = self.pixmap_item.pos()
 
-        # max_threads = 16
-        # sqrt_thread_count = int(np.sqrt(max_threads))
-        #
-        # block_width = int(self.width)
-        # block_height = int(self.height)
-        # block_offset_width = int(self.width * self.down_sample_factors[self.cur_level])
-        # block_offset_height = int(self.height * self.down_sample_factors[self.cur_level])
-        #
-        # image_offset_width = int(self.width * self.down_sample_factors[self.cur_level])
-        # image_offset_height = int(self.height * self.down_sample_factors[self.cur_level])
-        #
-        # offset_mouse_pos = self.pos - QPointF(image_offset_width, image_offset_height)
-        #
-        # self.painter = QPainter(self.fused_image)
-        #
-        # with mp.ThreadPoolExecutor(max_workers=max_threads) as executor:
-        #     futures = [executor.submit(self.process_image_block, i, offset_mouse_pos, block_width,
-        #                                block_height, block_offset_width, block_offset_height, sqrt_thread_count,
-        #                                self.cur_level)
-        #                for i in range(max_threads)]
-        #
-        #     mp.wait(futures)
-        #
-        #     self.painter.end()
-        #
-        #     self.pixmap_item.setPixmap(self.fused_image)
-        #     self.scale = self.down_sample_factors[self.cur_level] / self.cur_scaling_factor
-        #     self.pixmap_item.setScale(self.scale)
         self.check_for_update(QPointF(0, 0), True)
         self.sendPixmap.emit(self.pixmap_item)
 
@@ -129,36 +105,51 @@ class slide_view(QGraphicsView):
         self.width = self.scene().views()[0].viewport().width()
         self.height = self.scene().views()[0].viewport().height()
 
+        self.mouse_pos = QPointF(np.clip(self.mouse_pos.x(), 0, self.dimensions[0][0]),
+                                 np.clip(self.mouse_pos.y(), 0, self.dimensions[0][1]))
+
+        # TODO: Problem -> The Mouse pos is used to calculate the next patch. However, this leads to slight
+        # inconsistencies in the produced image. A static grid approach would probably be the best solution
+        print(self.mouse_pos)
+
         max_threads = 16
         sqrt_thread_count = int(np.sqrt(max_threads))
 
         new_patches = [False for r in range(max_threads)]
 
-        if False:
-            if self.pos.x() < - self.width:
-                self.pixmap_item.moveBy(self.width * self.scale, 0)
-                new_patches[3] = True
-                new_patches[7] = True
-                new_patches[11] = True
-                new_patches[15] = True
-            if self.pos.x() >= self.width:
-                self.pixmap_item.moveBy(-self.width * self.scale, 0)
-                new_patches[0] = True
-                new_patches[4] = True
-                new_patches[8] = True
-                new_patches[12] = True
-            if self.pos.y() < -self.height:
-                self.pixmap_item.moveBy(0, self.height * self.scale)
-                new_patches[0] = True
-                new_patches[1] = True
-                new_patches[2] = True
-                new_patches[3] = True
-            if self.pos.y() >= self.height:
-                self.pixmap_item.moveBy(0, -self.height * self.scale)
-                new_patches[12] = True
-                new_patches[13] = True
-                new_patches[14] = True
-                new_patches[15] = True
+        if self.pos.x() < - self.width:
+            self.pixmap_item.moveBy(self.width * self.scale, 0)
+            new_patches[3] = True
+            new_patches[7] = True
+            new_patches[11] = True
+            new_patches[15] = True
+
+            self.image_blocks = np.roll(self.image_blocks, -1, axis=0)
+        if self.pos.x() >= self.width:
+            self.pixmap_item.moveBy(-self.width * self.scale, 0)
+            new_patches[0] = True
+            new_patches[4] = True
+            new_patches[8] = True
+            new_patches[12] = True
+
+            self.image_blocks = np.roll(self.image_blocks, 1, axis=0)
+        if self.pos.y() < -self.height:
+            self.pixmap_item.moveBy(0, self.height * self.scale)
+            new_patches[12] = True
+            new_patches[13] = True
+            new_patches[14] = True
+            new_patches[15] = True
+
+            self.image_blocks = np.roll(self.image_blocks, -1, axis=1)
+        if self.pos.y() >= self.height:
+            self.pixmap_item.moveBy(0, -self.height * self.scale)
+            new_patches[0] = True
+            new_patches[1] = True
+            new_patches[2] = True
+            new_patches[3] = True
+
+            self.image_blocks = np.roll(self.image_blocks, 1, axis=1)
+
         if zoomed:
             new_patches = [True for r in range(16)]
 
@@ -180,19 +171,19 @@ class slide_view(QGraphicsView):
             with mp.ThreadPoolExecutor(max_workers=max_threads) as executor:
                 futures = [executor.submit(self.process_image_block, i, offset_mouse_pos, block_width,
                                            block_height, block_offset_width, block_offset_height, sqrt_thread_count,
-                                           self.cur_level)
+                                           self.cur_level, new_patches[i])
                            for i in range(max_threads)]
 
                 mp.wait(futures)
 
                 self.painter.end()
 
-                self.pixmap_item.setPixmap(self.fused_image)
-                self.scale = self.down_sample_factors[self.cur_level] / self.cur_scaling_factor
-                self.pixmap_item.setScale(self.scale)
+            self.pixmap_item.setPixmap(self.fused_image)
+            self.scale = self.down_sample_factors[self.cur_level] / self.cur_scaling_factor
+            self.pixmap_item.setScale(self.scale)
 
     def process_image_block(self, block_index, mouse_pos, block_width, block_height, block_offset_width,
-                            block_offset_height, sqrt_threads, level):
+                            block_offset_height, sqrt_threads, level, generate_new):
         idx_width = block_index % sqrt_threads
         idx_height = block_index // sqrt_threads
 
@@ -200,18 +191,18 @@ class slide_view(QGraphicsView):
             idx_width * block_offset_width,
             idx_height * block_offset_height
         )
+        if generate_new:
+            image = self.slide.read_region(
+                (int(mouse_pos.x() + block_location[0]), int(mouse_pos.y() + block_location[1])),
+                level,
+                (block_width, block_height)
+            )
 
-        image = self.slide.read_region(
-            (int(mouse_pos.x() + block_location[0]), int(mouse_pos.y() + block_location[1])),
-            level,
-            (block_width, block_height)
-        )
-
-        self.image_blocks[block_index] = QPixmap.fromImage(ImageQT.ImageQt(image))
+            self.image_blocks[idx_width, idx_height] = QPixmap.fromImage(ImageQT.ImageQt(image))
 
         self.painter.drawPixmap(idx_width * block_width,
                                 idx_height * block_height,
-                                block_width, block_height, QPixmap.fromImage(ImageQT.ImageQt(image)))
+                                block_width, block_height, self.image_blocks[idx_width, idx_height])
 
 
 
@@ -264,7 +255,7 @@ class slide_view(QGraphicsView):
 
         # self.mouse_pos += QPointF(self.width / 2 * (old_scaling_factor - self.cur_scaling_factor),
         #                           self.height / 2 * (old_scaling_factor - self.cur_scaling_factor))
-        # self.mouse_pos += new_pos
+        self.mouse_pos += new_pos
 
         self.check_for_update(QPointF(0, 0), scale_jump)
 
@@ -305,8 +296,8 @@ class slide_view(QGraphicsView):
             self.pan_start = new_pos
             self.pos = self.pixmap_item.pos() / self.scale
 
-            move = QPointF(move.x() / self.width * self.dimensions[self.dim_count - self.cur_level - 1][0],
-                           move.y() / self.height * self.dimensions[self.dim_count - self.cur_level - 1][1])
-            #self.mouse_pos += move
+            move = QPointF(move.x() * self.cur_scaling_factor,
+                           move.y() * self.cur_scaling_factor)
+            self.mouse_pos += move
             self.check_for_update(move, False)
         super(QGraphicsView, self).mouseMoveEvent(event)
