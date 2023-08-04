@@ -9,6 +9,7 @@ from typing import *
 from typing_extensions import TypedDict
 import numpy as np
 import os
+
 openslide_path = os.path.abspath("../../openslide/bin")
 os.add_dll_directory(openslide_path)
 from openslide import OpenSlide
@@ -35,6 +36,7 @@ class slide_view(QGraphicsView):
         self.cur_scaling_factor: float = 0.0
         self.max_scaling_factor: float = 0.0
         self.relative_scaling_factor: float = 0.0
+        self.cur_downsample: int = 0
         self.cur_level = 0
         self.dim_count = 0
         self.down_sample_factors = {}
@@ -48,6 +50,7 @@ class slide_view(QGraphicsView):
         self.pos = QPointF(0, 0)
         self.scale = 1
         self.mouse_pos = QPointF(0, 0)
+        self.grid_points = {}
 
     def fitInView(self, rect, aspect_ratio_mode=Qt.AspectRatioMode.KeepAspectRatio):
         if not self.filepath:
@@ -98,6 +101,9 @@ class slide_view(QGraphicsView):
         self.relative_scaling_factor = self.cur_scaling_factor / self.down_sample_factors[self.cur_level]
         self.pos = self.pixmap_item.pos()
 
+        self.cur_downsample = self.slide.level_downsamples[self.cur_level]
+        self.grid_points = {0: 0, 1: 0, 2: self.width * self.cur_downsample, 3: self.height * self.cur_downsample}
+
         self.check_for_update(QPointF(0, 0), True)
         self.sendPixmap.emit(self.pixmap_item)
 
@@ -105,44 +111,57 @@ class slide_view(QGraphicsView):
         self.width = self.scene().views()[0].viewport().width()
         self.height = self.scene().views()[0].viewport().height()
 
-        self.mouse_pos = QPointF(np.clip(self.mouse_pos.x(), 0, self.dimensions[0][0]),
-                                 np.clip(self.mouse_pos.y(), 0, self.dimensions[0][1]))
+        # self.mouse_pos = QPointF(np.clip(self.mouse_pos.x(), 0, self.dimensions[0][0]),
+        #                          np.clip(self.mouse_pos.y(), 0, self.dimensions[0][1]))
 
         # TODO: Problem -> The Mouse pos is used to calculate the next patch. However, this leads to slight
         # inconsistencies in the produced image. A static grid approach would probably be the best solution
-        print(self.mouse_pos)
 
         max_threads = 16
         sqrt_thread_count = int(np.sqrt(max_threads))
 
         new_patches = [False for r in range(max_threads)]
 
-        if self.pos.x() < - self.width:
+        self.cur_downsample = self.slide.level_downsamples[self.cur_level]
+
+        print(self.mouse_pos)
+        grid_width = self.grid_points[2] - self.grid_points[0]
+        grid_height = self.grid_points[3] - self.grid_points[1]
+
+        if self.mouse_pos.x() > self.grid_points[2]:
             self.pixmap_item.moveBy(self.width * self.scale, 0)
+            self.grid_points[0] += grid_width
+            self.grid_points[2] += grid_width
             new_patches[3] = True
             new_patches[7] = True
             new_patches[11] = True
             new_patches[15] = True
 
             self.image_blocks = np.roll(self.image_blocks, -1, axis=0)
-        if self.pos.x() >= self.width:
+        if self.mouse_pos.x() < self.grid_points[0]:
             self.pixmap_item.moveBy(-self.width * self.scale, 0)
+            self.grid_points[0] -= grid_width
+            self.grid_points[2] -= grid_width
             new_patches[0] = True
             new_patches[4] = True
             new_patches[8] = True
             new_patches[12] = True
 
             self.image_blocks = np.roll(self.image_blocks, 1, axis=0)
-        if self.pos.y() < -self.height:
+        if self.mouse_pos.y() > self.grid_points[3]:
             self.pixmap_item.moveBy(0, self.height * self.scale)
+            self.grid_points[1] += grid_height
+            self.grid_points[3] += grid_height
             new_patches[12] = True
             new_patches[13] = True
             new_patches[14] = True
             new_patches[15] = True
 
             self.image_blocks = np.roll(self.image_blocks, -1, axis=1)
-        if self.pos.y() >= self.height:
+        if self.mouse_pos.y() < self.grid_points[1]:
             self.pixmap_item.moveBy(0, -self.height * self.scale)
+            self.grid_points[1] -= grid_height
+            self.grid_points[3] -= grid_height
             new_patches[0] = True
             new_patches[1] = True
             new_patches[2] = True
@@ -154,7 +173,6 @@ class slide_view(QGraphicsView):
             new_patches = [True for r in range(16)]
 
         if any(new_patches):
-
             block_width = int(self.width)
             block_height = int(self.height)
             block_offset_width = int(self.width * self.down_sample_factors[self.cur_level])
@@ -163,7 +181,8 @@ class slide_view(QGraphicsView):
             image_offset_width = int(self.width * self.down_sample_factors[self.cur_level])
             image_offset_height = int(self.height * self.down_sample_factors[self.cur_level])
 
-            offset_mouse_pos = self.mouse_pos - QPointF(image_offset_width, image_offset_height)
+            offset_mouse_pos = QPointF(self.grid_points[0], self.grid_points[1]) - \
+                               QPointF(image_offset_width, image_offset_height)
 
             self.fused_image = QPixmap(4 * self.width, 4 * self.height)
             self.painter = QPainter(self.fused_image)
@@ -204,7 +223,9 @@ class slide_view(QGraphicsView):
                                 idx_height * block_height,
                                 block_width, block_height, self.image_blocks[idx_width, idx_height])
 
-
+        # print(f"block_id: {idx_width}, {idx_height} block_Coordinates: {int(mouse_pos.x() + block_location[0])}, "
+        #       f"{int(mouse_pos.y() + block_location[1])}, {int(mouse_pos.x() + block_location[0]) + block_width * self.down_sample_factors[level]},"
+        #       f" {int(mouse_pos.y() + block_location[1]) + block_height * self.down_sample_factors[level]}")
 
     def wheelEvent(self, event: QWheelEvent):
         """
@@ -227,21 +248,42 @@ class slide_view(QGraphicsView):
         level = self.slide.get_best_level_for_downsample(self.cur_scaling_factor)
         if level < self.cur_level:
             scale_jump = True
-            self.mouse_pos += QPointF(self.width * self.down_sample_factors[self.cur_level]/2,
-                                      self.height * self.down_sample_factors[self.cur_level]/2)
+            self.mouse_pos += QPointF(self.width * self.down_sample_factors[self.cur_level] / 2,
+                                      self.height * self.down_sample_factors[self.cur_level] / 2)
+            grid_width = (self.grid_points[2]-self.grid_points[0])/2
+            grid_height = (self.grid_points[3]-self.grid_points[1])/2
+            self.grid_points = {0: self.grid_points[0], 1: self.grid_points[1],
+                                2: self.grid_points[0]+grid_width, 3: self.grid_points[1]+grid_height}
+            if self.grid_points[2] - self.mouse_pos.x() < 0:
+                self.grid_points[0] += grid_width
+                self.grid_points[2] += grid_width
+            if self.grid_points[3] - self.mouse_pos.y() < 0:
+                self.grid_points[1] += grid_height
+                self.grid_points[3] += grid_height
         elif level > self.cur_level:
             scale_jump = True
             self.mouse_pos -= QPointF(self.width * self.down_sample_factors[level] / 2,
                                       self.height * self.down_sample_factors[level] / 2)
+            grid_width = (self.grid_points[2] - self.grid_points[0]) * 2
+            grid_height = (self.grid_points[3] - self.grid_points[1]) * 2
+            self.grid_points = {0: self.grid_points[0], 1: self.grid_points[1],
+                                2: self.grid_points[0] + grid_width, 3: self.grid_points[1] + grid_height}
+            if int(self.grid_points[0]) % int(grid_width) > 1:
+                self.grid_points[0] -= grid_width/2
+                self.grid_points[2] -= grid_width/2
+            if int(self.grid_points[3]) % int(grid_height) > 1:
+                self.grid_points[1] -= grid_height/2
+                self.grid_points[3] -= grid_height/2
+
         self.cur_level = level
-        self.relative_scaling_factor = self.cur_scaling_factor/self.down_sample_factors[self.cur_level]
-        self.pixmap_item.setScale(self.down_sample_factors[self.cur_level]/self.cur_scaling_factor)
-        self.scale = self.down_sample_factors[self.cur_level]/self.cur_scaling_factor
+        self.relative_scaling_factor = self.cur_scaling_factor / self.down_sample_factors[self.cur_level]
+        self.pixmap_item.setScale(self.down_sample_factors[self.cur_level] / self.cur_scaling_factor)
+        self.scale = self.down_sample_factors[self.cur_level] / self.cur_scaling_factor
         self.pixmap_item.moveBy(self.width * (old_scale - self.scale),
                                 self.height * (old_scale - self.scale))
 
         new_pos = self.mapToScene(event.position().toPoint())
-        move = QPointF(self.width/2, self.height/2) - new_pos
+        move = QPointF(self.width / 2, self.height / 2) - new_pos
 
         self.pixmap_item.moveBy(move.x() * self.scale,
                                 move.y() * self.scale)
