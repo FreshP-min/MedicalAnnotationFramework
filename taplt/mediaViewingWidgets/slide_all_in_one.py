@@ -113,10 +113,10 @@ class slide_view(QGraphicsView):
         self.cur_downsample = self.slide.level_downsamples[self.cur_level]
         self.grid_points = {0: 0, 1: 0, 2: self.width * self.cur_downsample, 3: self.height * self.cur_downsample}
 
-        self.check_for_update(QPointF(0, 0), True)
+        self.check_for_update(True)
         self.sendPixmap.emit(self.pixmap_item)
 
-    def check_for_update(self, move, zoomed):
+    def check_for_update(self, zoomed):
         self.width = self.scene().views()[0].viewport().width()
         self.height = self.scene().views()[0].viewport().height()
 
@@ -130,7 +130,9 @@ class slide_view(QGraphicsView):
         grid_width = self.grid_points[2] - self.grid_points[0]
         grid_height = self.grid_points[3] - self.grid_points[1]
 
-        while self.mouse_pos.x() > self.grid_points[2]:
+        int_mouse_pos = self.mouse_pos.toPoint()
+
+        while int_mouse_pos.x() > self.grid_points[2]:
             self.pixmap_item.moveBy(self.width * self.level_zoom, 0)
             self.grid_points[0] += grid_width
             self.grid_points[2] += grid_width
@@ -140,7 +142,7 @@ class slide_view(QGraphicsView):
             new_patches[15] = True
 
             self.image_blocks = np.roll(self.image_blocks, -1, axis=0)
-        while self.mouse_pos.x() < self.grid_points[0]:
+        while int_mouse_pos.x() < self.grid_points[0]:
             self.pixmap_item.moveBy(-self.width * self.level_zoom, 0)
             self.grid_points[0] -= grid_width
             self.grid_points[2] -= grid_width
@@ -150,7 +152,7 @@ class slide_view(QGraphicsView):
             new_patches[12] = True
 
             self.image_blocks = np.roll(self.image_blocks, 1, axis=0)
-        while self.mouse_pos.y() > self.grid_points[3]:
+        while int_mouse_pos.y() > self.grid_points[3]:
             self.pixmap_item.moveBy(0, self.height * self.level_zoom)
             self.grid_points[1] += grid_height
             self.grid_points[3] += grid_height
@@ -160,7 +162,7 @@ class slide_view(QGraphicsView):
             new_patches[15] = True
 
             self.image_blocks = np.roll(self.image_blocks, -1, axis=1)
-        while self.mouse_pos.y() < self.grid_points[1]:
+        while int_mouse_pos.y() < self.grid_points[1]:
             self.pixmap_item.moveBy(0, -self.height * self.level_zoom)
             self.grid_points[1] -= grid_height
             self.grid_points[3] -= grid_height
@@ -201,8 +203,8 @@ class slide_view(QGraphicsView):
                 pen.setWidth(40)
                 pen.setColor(QColor('red'))
                 self.painter.setPen(pen)
-                self.painter.drawPoint(QPointF(self.mouse_pos.x()/self.cur_scaling_factor + self.width + 50,
-                                               self.mouse_pos.y()/self.cur_scaling_factor + self.height + 50))
+                self.painter.drawPoint(QPointF(self.from_vp_to_scene(self.from_slide_to_vp(self.mouse_pos)).x()/self.level_zoom,
+                                               self.from_vp_to_scene(self.from_slide_to_vp(self.mouse_pos)).y()/self.level_zoom))
 
                 self.painter.end()
 
@@ -236,31 +238,33 @@ class slide_view(QGraphicsView):
         #       f"{int(mouse_pos.y() + block_location[1])}, {int(mouse_pos.x() + block_location[0]) + block_width * self.down_sample_factors[level]},"
         #       f" {int(mouse_pos.y() + block_location[1]) + block_height * self.down_sample_factors[level]}")
 
-    def update_grid(self, new_level) -> bool:
+    def jump_update(self, new_level) -> (float, bool):
         if new_level != self.cur_level:
-            zoom_adjustment = QPointF(self.width * self.down_sample_factors[self.cur_level] / 2,
-                                      self.height * self.down_sample_factors[self.cur_level] / 2)
+            # zoom_adjustment = QPointF(self.width * self.down_sample_factors[self.cur_level] / 2,
+            #                           self.height * self.down_sample_factors[self.cur_level] / 2)
             old_grid_width = (self.grid_points[2]-self.grid_points[0])
             old_grid_height = (self.grid_points[3]-self.grid_points[1])
-            self.pixmap_item.setPos(QPointF(0, 0))
-            self.level_zoom = 0.5
+            #self.pixmap_item.setPos(QPointF(0, 0))
 
             if new_level < self.cur_level:
-                self.mouse_pos -= zoom_adjustment
+                self.cur_level = new_level
+                #self.mouse_pos -= zoom_adjustment
                 grid_width = old_grid_width/2
                 grid_height = old_grid_height/2
-                self.grid_points[2] += grid_width
-                self.grid_points[3] += grid_height
+                self.grid_points[2] -= grid_width
+                self.grid_points[3] -= grid_height
                 if self.grid_points[2] - self.mouse_pos.x() < 0:
-                    self.grid_points[0] += grid_width,
+                    self.grid_points[0] += grid_width
                     self.grid_points[2] += grid_width
                 if self.grid_points[3] - self.mouse_pos.y() < 0:
                     self.grid_points[1] += grid_height
                     self.grid_points[3] += grid_height
+                return 0.5, True
             elif new_level > self.cur_level:
-                self.mouse_pos += zoom_adjustment
-                grid_width = old_grid_width * 2
-                grid_height = old_grid_height * 2
+                self.cur_level = new_level
+                #self.mouse_pos += zoom_adjustment
+                grid_width = old_grid_width
+                grid_height = old_grid_height
                 self.grid_points[2] += grid_width
                 self.grid_points[3] += grid_height
                 # if int(self.grid_points[0]) % int(grid_width) > 1:
@@ -269,12 +273,12 @@ class slide_view(QGraphicsView):
                 # if int(self.grid_points[3]) % int(grid_height) > 1:
                 #     self.grid_points[1] -= old_grid_height
                 #     self.grid_points[3] -= old_grid_height
-            self.cur_level = new_level
-            return True
+                return 1.0, True
         else:
-            return False
+            return self.pixmap_item.scale(), False
 
     def from_vp_to_slide(self, point: QPointF):
+        ### needs to be dependend on the grid point instead of the mouse pos
         new_point = QPointF(point)
         new_point *= self.cur_scaling_factor
         new_point += self.mouse_pos
@@ -284,6 +288,12 @@ class slide_view(QGraphicsView):
         new_point = QPointF(point)
         new_point -= self.mouse_pos
         new_point /= self.cur_scaling_factor
+        return -new_point
+
+    def from_vp_to_scene(self, point):
+        new_point = QPointF(point)
+        new_point -= self.pixmap_item.pos()
+        new_point -= self.pixmap_item.offset()
         return new_point
 
     def wheelEvent(self, event: QWheelEvent):
@@ -311,23 +321,28 @@ class slide_view(QGraphicsView):
         #
         # self.pixmap_item.moveBy(self.width/2 - old_pos.x(), self.height/2 - old_pos.y())
 
-        scale_jump = self.update_grid(level)
+        old_level_zoom, scale_jump = self.jump_update(level)
 
         self.relative_scaling_factor = self.cur_scaling_factor / self.down_sample_factors[self.cur_level]
         self.pixmap_item.setScale(self.down_sample_factors[self.cur_level] / self.cur_scaling_factor)
-        old_level_zoom = self.level_zoom
-        self.level_zoom = self.down_sample_factors[self.cur_level] / self.cur_scaling_factor
-        self.pixmap_item.moveBy(self.width * (old_level_zoom - self.level_zoom)/2,
-                                self.height * (old_level_zoom - self.level_zoom)/2)
+        # self.pixmap_item.moveBy(self.width * (old_level_zoom - self.pixmap_item.scale())/2,
+        #                         self.height * (old_level_zoom - self.pixmap_item.scale())/2)
+        #print(f"This is the pixmap pos: {self.pixmap_item.pos()}")
 
         mouse_zoom_adjust = QPointF(self.width * (self.cur_scaling_factor / scale_factor - self.cur_scaling_factor) / 2,
                                     self.height * (
                                                 self.cur_scaling_factor / scale_factor - self.cur_scaling_factor) / 2)
-        self.mouse_pos += mouse_zoom_adjust
+        new_mouse_pos = self.mouse_pos + mouse_zoom_adjust
+        # Good idea, however we need to make it relative to the grid point and not the mouse pos.
+        # For the mouse pos it just sets it to the same value each time
+        self.pixmap_item.setPos(self.from_slide_to_vp(new_mouse_pos))
+        self.mouse_pos = new_mouse_pos
 
-        print(self.mouse_pos)
+        print(f"This is the mouse pos: {self.mouse_pos}")
+        print(f"This is the pixmap pos: {self.pixmap_item.pos()}")
+        print(f"This is the expected pix pos: {self.from_slide_to_vp(new_mouse_pos)}")
 
-        self.check_for_update(QPointF(0, 0), scale_jump)
+        self.check_for_update(scale_jump)
 
     def mousePressEvent(self, event: QMouseEvent):
         """
@@ -369,6 +384,5 @@ class slide_view(QGraphicsView):
             move = QPointF(move.x() * self.cur_scaling_factor,
                            move.y() * self.cur_scaling_factor)
             self.mouse_pos += move
-            print(self.mouse_pos)
-            self.check_for_update(move, False)
+            self.check_for_update(False)
         super(QGraphicsView, self).mouseMoveEvent(event)
